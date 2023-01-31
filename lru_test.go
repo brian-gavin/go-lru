@@ -79,3 +79,74 @@ func BenchmarkEviction(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkAccess(b *testing.B) {
+	type S struct{ i int }
+	b.Run("MapToPtr", func(b *testing.B) {
+		setup := func() map[string]*S {
+			m := make(map[string]*S, 1)
+			m["a"] = new(S)
+			m["b"] = new(S)
+			m["c"] = new(S)
+			return m
+		}
+		m := setup()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var k string
+			switch i % 3 {
+			case 0:
+				k = "a"
+			case 1:
+				k = "b"
+			case 2:
+				k = "c"
+			}
+			s := m[k]
+			s.i = i
+		}
+	})
+	b.Run("MapToIndexToSlice", func(b *testing.B) {
+		setup := func() (map[string]int, []S) {
+			m := make(map[string]int)
+			s := make([]S, 3)
+			m["a"] = 0
+			m["b"] = 1
+			m["c"] = 2
+			return m, s
+		}
+		m, s := setup()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var k string
+			switch i % 3 {
+			case 0:
+				k = "a"
+			case 1:
+				k = "b"
+			case 2:
+				k = "c"
+			}
+			s[m[k]].i = i
+		}
+	})
+	b.Run("SwapPointers", func(b *testing.B) {
+		a := []*item[string, *int]{{}, {}}
+		for i := 0; i < b.N; i++ {
+			a[0], a[1] = a[1], a[0]
+		}
+	})
+	b.Run("SwapItem", func(b *testing.B) {
+		a := []item[string, *int]{{}, {}}
+		for i := 0; i < b.N; i++ {
+			a[0], a[1] = a[1], a[0]
+		}
+	})
+	b.Run("SwapLargeObject", func(b *testing.B) {
+		type largeItem [128]byte
+		a := []largeItem{{}, {}}
+		for i := 0; i < b.N; i++ {
+			a[0], a[1] = a[1], a[0]
+		}
+	})
+}

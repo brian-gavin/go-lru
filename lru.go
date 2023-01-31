@@ -13,63 +13,72 @@ type item[K any, V any] struct {
 	index  int
 }
 
-type items[K comparable, V any] struct {
-	keyToItem map[K]*item[K, V]
-	pq        []*item[K, V]
+// itemKVHeap implements the heap.Interface and maintains a mapping from K keys to items.
+type itemKVHeap[K comparable, V any] struct {
+	keyToItem map[K]*item[K, V] // maps a key to a *item
+	pq        []*item[K, V]     // priority queue of *item ordered by expiration time
 }
 
-func makeItems[K comparable, V any](size int) items[K, V] {
-	i := items[K, V]{
+func makeItems[K comparable, V any](size int) itemKVHeap[K, V] {
+	h := itemKVHeap[K, V]{
 		keyToItem: make(map[K]*item[K, V], size),
 		pq:        make([]*item[K, V], 0, size),
 	}
-	heap.Init(&i)
-	return i
+	heap.Init(&h)
+	return h
 }
 
-func (is items[K, V]) Len() int { return len(is.pq) }
+func (h itemKVHeap[K, V]) Len() int { return len(h.pq) }
 
 // Less returns true if a < b. a < b if either a is expired, otherwise, if a.expire < b.expire
-func (is items[K, V]) Less(i, j int) bool {
-	a, b := is.pq[i], is.pq[j]
+func (h itemKVHeap[K, V]) Less(i, j int) bool {
+	a, b := h.pq[i], h.pq[j]
 	return a.expire.Before(time.Now()) || a.expire.Before(b.expire)
 }
 
-func (is items[K, V]) Swap(i, j int) {
-	pq := is.pq
+func (h itemKVHeap[K, V]) Swap(i, j int) {
+	pq := h.pq
 	pq[i], pq[j] = pq[j], pq[i]
 	pq[i].index = i
 	pq[j].index = j
 }
 
-func (is *items[K, V]) Push(x any) {
-	n := len(is.pq)
+func (h *itemKVHeap[K, V]) Push(x any) {
+	n := len(h.pq)
 	item := x.(*item[K, V])
 	item.index = n
-	is.keyToItem[item.k] = item
-	is.pq = append(is.pq, item)
+	h.keyToItem[item.k] = item
+	h.pq = append(h.pq, item)
 }
 
-func (is *items[K, V]) Pop() any {
-	old := is.pq
+func (h *itemKVHeap[K, V]) Pop() any {
+	old := h.pq
 	n := len(old)
 	item := old[n-1]
 	old[n-1] = nil  // avoid memory leak
 	item.index = -1 // for safety
-	is.pq = old[0 : n-1]
-	delete(is.keyToItem, item.k)
+	h.pq = old[0 : n-1]
+	delete(h.keyToItem, item.k)
 	return item
+}
+
+func (h *itemKVHeap[K, V]) Item(k K) (item *item[K, V], exists bool) {
+	item, exists = h.keyToItem[k]
+	return
 }
 
 type Cache[K comparable, V any] struct {
 	mu        sync.Mutex
-	items     items[K, V]
+	items     itemKVHeap[K, V]
 	size      int
 	ttl       time.Duration
 	onEvicted func(V)
 }
 
 func New[K comparable, V any](size int, ttl time.Duration, onEvicted func(V)) *Cache[K, V] {
+	if size <= 0 {
+		panic("Cache: cannot have 0 or negative size")
+	}
 	return &Cache[K, V]{
 		size:      size,
 		items:     makeItems[K, V](size),
@@ -81,7 +90,7 @@ func New[K comparable, V any](size int, ttl time.Duration, onEvicted func(V)) *C
 func (c *Cache[K, V]) evict() {
 	x := heap.Pop(&c.items)
 	if x == nil {
-		panic("evict called with empty tlru")
+		panic("evict called with empty heap")
 	}
 	evict := x.(*item[K, V])
 	c.onEvicted(evict.v)
@@ -109,7 +118,7 @@ func (c *Cache[K, V]) delete(item *item[K, V]) {
 func (c *Cache[K, V]) Put(k K, v V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if item, exists := c.items.keyToItem[k]; exists {
+	if item, exists := c.items.Item(k); exists {
 		c.update(item, v)
 		return
 	}
@@ -127,7 +136,7 @@ func (c *Cache[K, V]) Put(k K, v V) {
 func (c *Cache[K, V]) Get(k K) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	item, exists := c.items.keyToItem[k]
+	item, exists := c.items.Item(k)
 	if !exists {
 		var v V
 		return v, false
@@ -139,7 +148,7 @@ func (c *Cache[K, V]) Get(k K) (V, bool) {
 func (c *Cache[K, V]) Remove(k K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	item, exists := c.items.keyToItem[k]
+	item, exists := c.items.Item(k)
 	if !exists {
 		return
 	}
