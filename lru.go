@@ -6,119 +6,120 @@ import (
 	"time"
 )
 
-type lruItem[K any] struct {
+type item[K any, V any] struct {
 	k      K
+	v      V
 	expire time.Time
 	index  int
 }
 
-type priorityQueue[K any] []*lruItem[K]
+type items[K comparable, V any] struct {
+	keyToItem map[K]*item[K, V]
+	pq        []*item[K, V]
+}
 
-func (pq priorityQueue[K]) Len() int { return len(pq) }
+func makeItems[K comparable, V any](size int) items[K, V] {
+	i := items[K, V]{
+		keyToItem: make(map[K]*item[K, V], size),
+		pq:        make([]*item[K, V], 0, size),
+	}
+	heap.Init(&i)
+	return i
+}
+
+func (is items[K, V]) Len() int { return len(is.pq) }
 
 // Less returns true if a < b. a < b if either a is expired, otherwise, if a.expire < b.expire
-func (pq priorityQueue[K]) Less(i, j int) bool {
-	a, b := pq[i], pq[j]
+func (is items[K, V]) Less(i, j int) bool {
+	a, b := is.pq[i], is.pq[j]
 	return a.expire.Before(time.Now()) || a.expire.Before(b.expire)
 }
 
-func (pq priorityQueue[K]) Swap(i, j int) {
+func (is items[K, V]) Swap(i, j int) {
+	pq := is.pq
 	pq[i], pq[j] = pq[j], pq[i]
 	pq[i].index = i
 	pq[j].index = j
 }
 
-func (pq *priorityQueue[K]) Push(x any) {
-	n := len(*pq)
-	item := x.(*lruItem[K])
+func (is *items[K, V]) Push(x any) {
+	n := len(is.pq)
+	item := x.(*item[K, V])
 	item.index = n
-	*pq = append(*pq, item)
+	is.keyToItem[item.k] = item
+	is.pq = append(is.pq, item)
 }
 
-func (pq *priorityQueue[K]) Pop() any {
-	old := *pq
+func (is *items[K, V]) Pop() any {
+	old := is.pq
 	n := len(old)
 	item := old[n-1]
 	old[n-1] = nil  // avoid memory leak
 	item.index = -1 // for safety
-	*pq = old[0 : n-1]
+	is.pq = old[0 : n-1]
+	delete(is.keyToItem, item.k)
 	return item
-}
-
-type cacheItem[K, V any] struct {
-	lruItem *lruItem[K]
-	v       V
 }
 
 type Cache[K comparable, V any] struct {
 	mu        sync.Mutex
-	items     map[K]cacheItem[K, V]
-	lru       priorityQueue[K]
+	items     items[K, V]
 	size      int
 	ttl       time.Duration
 	onEvicted func(V)
 }
 
-func New[K comparable, V any](size int, ttl time.Duration) *Cache[K, V] {
-	c := &Cache[K, V]{
-		size:  size,
-		items: make(map[K]cacheItem[K, V], size),
-		lru:   priorityQueue[K]{},
-		ttl:   ttl,
+func New[K comparable, V any](size int, ttl time.Duration, onEvicted func(V)) *Cache[K, V] {
+	return &Cache[K, V]{
+		size:      size,
+		items:     makeItems[K, V](size),
+		ttl:       ttl,
+		onEvicted: onEvicted,
 	}
-	heap.Init(&c.lru)
-	return c
 }
 
 func (c *Cache[K, V]) evict() {
-	x := heap.Pop(&c.lru)
+	x := heap.Pop(&c.items)
 	if x == nil {
 		panic("evict called with empty tlru")
 	}
-	evict := x.(*lruItem[K])
-	item := c.items[evict.k]
-	c.onEvicted(item.v)
-	delete(c.items, evict.k)
+	evict := x.(*item[K, V])
+	c.onEvicted(evict.v)
 }
 
-func (c *Cache[K, V]) update(item cacheItem[K, V], v V) {
+func (c *Cache[K, V]) update(item *item[K, V], v V) {
 	item.v = v
-	c.items[item.lruItem.k] = item
 	c.refresh(item)
 }
 
-func (c *Cache[K, V]) refresh(item cacheItem[K, V]) {
-	item.lruItem.expire = time.Now().Add(c.ttl)
-	heap.Fix(&c.lru, item.lruItem.index)
+func (c *Cache[K, V]) refresh(item *item[K, V]) {
+	item.expire = time.Now().Add(c.ttl)
+	heap.Fix(&c.items, item.index)
 }
 
-func (c *Cache[K, V]) add(item cacheItem[K, V]) {
-	c.items[item.lruItem.k] = item
-	heap.Push(&c.lru, item.lruItem)
+func (c *Cache[K, V]) add(item *item[K, V]) {
+	heap.Push(&c.items, item)
 }
 
-func (c *Cache[K, V]) delete(item cacheItem[K, V]) {
-	heap.Remove(&c.lru, item.lruItem.index)
+func (c *Cache[K, V]) delete(item *item[K, V]) {
+	heap.Remove(&c.items, item.index)
 	c.onEvicted(item.v)
-	delete(c.items, item.lruItem.k)
 }
 
 func (c *Cache[K, V]) Put(k K, v V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if item, exists := c.items[k]; exists {
+	if item, exists := c.items.keyToItem[k]; exists {
 		c.update(item, v)
 		return
 	}
-	if len(c.items) == c.size {
+	if c.items.Len() == c.size {
 		c.evict()
 	}
-	item := cacheItem[K, V]{
-		v: v,
-		lruItem: &lruItem[K]{
-			k:      k,
-			expire: time.Now().Add(c.ttl),
-		},
+	item := &item[K, V]{
+		v:      v,
+		k:      k,
+		expire: time.Now().Add(c.ttl),
 	}
 	c.add(item)
 }
@@ -126,7 +127,7 @@ func (c *Cache[K, V]) Put(k K, v V) {
 func (c *Cache[K, V]) Get(k K) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	item, exists := c.items[k]
+	item, exists := c.items.keyToItem[k]
 	if !exists {
 		var v V
 		return v, false
@@ -138,7 +139,7 @@ func (c *Cache[K, V]) Get(k K) (V, bool) {
 func (c *Cache[K, V]) Remove(k K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	item, exists := c.items[k]
+	item, exists := c.items.keyToItem[k]
 	if !exists {
 		return
 	}

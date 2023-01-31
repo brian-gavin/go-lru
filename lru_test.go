@@ -7,14 +7,14 @@ import (
 )
 
 func TestCache(t *testing.T) {
-	c := New[string, int](2, time.Hour)
+	c := New[string](2, time.Hour, func(i int) {})
 	c.Put("A", 1)
 	time.Sleep(5 * time.Millisecond)
 	c.Put("B", 2)
-	if l := len(c.items); l != 2 {
+	if l := c.items.Len(); l != 2 {
 		t.Fatalf("items size %d is not 2", l)
 	}
-	if l := c.lru.Len(); l != 2 {
+	if l := c.items.Len(); l != 2 {
 		t.Fatalf("tlru size %d is not 2", l)
 	}
 	// LRU: [A, B]
@@ -37,7 +37,7 @@ func TestCache(t *testing.T) {
 
 func BenchmarkPutRemoveLargeCache(b *testing.B) {
 	const size = 10_000
-	c := New[string, int](size, time.Hour)
+	c := New[string](size, time.Hour, func(i int) {})
 	for i := 0; i < size; i++ {
 		c.Put(strconv.Itoa(i), i)
 	}
@@ -51,7 +51,7 @@ func BenchmarkPutRemoveLargeCache(b *testing.B) {
 func BenchmarkPutRemoveLargeCacheLargeItems(b *testing.B) {
 	const size = 10_000
 	type item [64]byte
-	c := New[string, item](size, time.Hour)
+	c := New[string](size, time.Hour, func(i item) {})
 	for i := 0; i < size; i++ {
 		c.Put(strconv.Itoa(i), item{})
 	}
@@ -63,14 +63,14 @@ func BenchmarkPutRemoveLargeCacheLargeItems(b *testing.B) {
 }
 
 func BenchmarkPut(b *testing.B) {
-	c := New[string, int](1, time.Hour)
+	c := New[string](1, time.Hour, func(i int) {})
 	for n := 0; n < b.N; n++ {
 		c.Put("a", 1)
 	}
 }
 
 func BenchmarkEviction(b *testing.B) {
-	c := New[string, int](1, time.Hour)
+	c := New[string](1, time.Hour, func(i int) {})
 	for n := 0; n < b.N; n++ {
 		if n%2 == 0 {
 			c.Put("a", 1)
