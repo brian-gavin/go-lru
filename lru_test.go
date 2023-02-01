@@ -51,38 +51,58 @@ func TestCache(t *testing.T) {
 	})
 }
 
-func BenchmarkPutRemoveLargeCache(b *testing.B) {
-	const size = 10_000
-	c := New[string](size, time.Hour, func(i int) {})
-	for i := 0; i < size; i++ {
-		c.Put(strconv.Itoa(i), i)
-	}
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		c.Put("a", 1)
-		c.Remove("a")
-	}
+func BenchmarkPutRemove(b *testing.B) {
+	b.Run("SmallCacheSmallItem", func(b *testing.B) {
+		c := New[string](1, time.Hour, func(i int) {})
+		for n := 0; n < b.N; n++ {
+			c.Put("a", 1)
+			c.Remove("a")
+		}
+	})
+	// benchmark the log(n) insert / pop.
+	b.Run("LargeCache", func(b *testing.B) {
+		const size = 10_000
+		c := New[string](size, time.Hour, func(i int) {})
+		for i := 0; i < size-1; i++ {
+			c.Put(strconv.Itoa(i), i)
+		}
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			c.Put("a", 1)
+			c.Remove("a")
+		}
+	})
+
+	b.Run("LargeCacheLargeItems", func(b *testing.B) {
+		const size = 10_000
+		type item [64]byte
+		c := New[string](size, time.Hour, func(i item) {})
+		for i := 0; i < size-1; i++ {
+			c.Put(strconv.Itoa(i), item{})
+		}
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			c.Put("a", item{})
+			c.Remove("a")
+		}
+	})
 }
 
-func BenchmarkPutRemoveLargeCacheLargeItems(b *testing.B) {
-	const size = 10_000
-	type item [64]byte
-	c := New[string](size, time.Hour, func(i item) {})
-	for i := 0; i < size; i++ {
-		c.Put(strconv.Itoa(i), item{})
-	}
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
-		c.Put("a", item{})
-		c.Remove("a")
-	}
-}
-
-func BenchmarkPut(b *testing.B) {
-	c := New[string](1, time.Hour, func(i int) {})
-	for n := 0; n < b.N; n++ {
+func BenchmarkPutGet(b *testing.B) {
+	b.Run("Put", func(b *testing.B) {
+		c := New[string](1, time.Hour, func(i int) {})
+		for n := 0; n < b.N; n++ {
+			c.Put("a", 1)
+		}
+	})
+	b.Run("Get", func(b *testing.B) {
+		c := New[string](1, time.Hour, func(i int) {})
 		c.Put("a", 1)
-	}
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			_, _ = c.Get("a")
+		}
+	})
 }
 
 func BenchmarkEviction(b *testing.B) {
