@@ -33,6 +33,22 @@ func TestCache(t *testing.T) {
 		t.Log(c.items)
 		t.Fatal("'C' should not be in the cache anymore!")
 	}
+	t.Run("OnEvicted", func(t *testing.T) {
+		called := false
+		c := New[string](1, time.Hour, func(v int) {
+			called = true
+		})
+		c.Put("a", 1)
+		c.Put("b", 2)
+		if !called {
+			t.Fatal("not called when 'A' was evicted.")
+		}
+		called = true
+		c.Remove("b")
+		if !called {
+			t.Fatal("not called when 'B' was removed.")
+		}
+	})
 }
 
 func BenchmarkPutRemoveLargeCache(b *testing.B) {
